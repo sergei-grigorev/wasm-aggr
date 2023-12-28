@@ -3,6 +3,7 @@ use std::fs::metadata;
 use std::str;
 
 use simplelog::SimpleLogger;
+use size::Size;
 use wasmtime::{Caller, Engine, Extern, Linker, Module, Store};
 
 fn main() {
@@ -13,11 +14,10 @@ fn main() {
     let file_name = &params[1];
     let metadata = metadata(file_name);
     match metadata {
-        Ok(meta) => log::info!(
-            "File [{}] has [{}] mb",
-            file_name,
-            (meta.len() / 1024 / 1024)
-        ),
+        Ok(meta) => {
+            let file_size = Size::from_bytes(meta.len());
+            log::info!("[{}] size: {}", file_name, file_size)
+        }
         Err(e) => {
             log::error!("WASM file metadata receiver failed: {}", e);
             panic!("File does not exists or cannot be open");
