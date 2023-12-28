@@ -1,10 +1,11 @@
 use std::env;
 use std::fs::metadata;
-use std::str;
 
 use simplelog::SimpleLogger;
 use size::Size;
-use wasmtime::{Caller, Engine, Extern, Linker, Module, Store};
+use wasmtime::{Caller, Engine, Linker, Module, Store};
+
+mod wasm32;
 
 fn main() {
     // init simple configuration for the logger
@@ -37,23 +38,13 @@ fn main() {
         .func_wrap(
             "host",
             "log_info",
-            |mut caller: Caller<'_, ()>, ptr: i32, len: i32| {
-                let mem = match caller.get_export("memory") {
-                    Some(Extern::Memory(mem)) => mem,
-                    _ => panic!("failed to find host memory"),
-                };
-                let data = mem
-                    .data(&caller)
-                    .get(ptr as u32 as usize..)
-                    .and_then(|arr| arr.get(..len as u32 as usize));
-                let string = match data {
-                    Some(data) => match str::from_utf8(data) {
-                        Ok(s) => s,
-                        Err(_) => panic!("invalid utf-8"),
-                    },
-                    None => panic!("pointer/length out of bounds"),
-                };
-                log::info!("WASM: {}", string);
+            |mut caller: Caller<'_, ()>, ptr: i32, len: i32| match wasm32::translate_str(
+                &mut caller,
+                ptr,
+                len,
+            ) {
+                Ok(msg) => log::info!("WASM log_info: {}", msg),
+                Err(e) => log::error!("WASM log_info: {}", e),
             },
         )
         .expect("Problem with registering exported function");
