@@ -38,13 +38,12 @@ fn main() {
         .func_wrap(
             "host",
             "log_info",
-            |mut caller: Caller<'_, ()>, ptr: i32, len: i32| match wasm32::translate_str(
-                &mut caller,
-                ptr,
-                len,
-            ) {
-                Ok(msg) => log::info!("WASM log_info: {}", msg),
-                Err(e) => log::error!("WASM log_info: {}", e),
+            |mut caller: Caller<'_, ()>, ptr: i32, len: i32| {
+                let caller = &mut caller;
+                match wasm32::translate_str(caller, ptr, len) {
+                    Ok(msg) => log::info!("WASM log_info: {}", msg),
+                    Err(e) => log::error!("WASM log_info: {}", e),
+                };
             },
         )
         .expect("Problem with registering exported function");
