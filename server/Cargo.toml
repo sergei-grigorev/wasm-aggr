@@ -1,5 +1,5 @@
 [package]
-name = "client"
+name = "server"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,3 +7,6 @@ edition = "2021"
 
 [dependencies]
 wasmtime = "16.0.0"
+js-sys = "0.3.66"
+log = "0.4.20"
+simplelog = "0.12.1"

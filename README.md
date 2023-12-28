@@ -5,9 +5,9 @@
 ### Build WASM Module
 
 - go to the directory `aggr`
-- run command `wasm-pack build --no-typescript --target web`
+- run command `wasm-pack build --no-typescript --target dyno`
 
-### Build and run client app
+### Build and run server app
 
-- go to the directory `client`
-- run command `cargo run -p client -- aggr/pkg/aggr_bg.wasm`
+- go to the directory `server`
+- run command `cargo run -p server -- aggr/pkg/aggr_bg.wasm`
