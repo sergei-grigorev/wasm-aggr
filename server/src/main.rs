@@ -3,7 +3,7 @@ use std::fs::metadata;
 
 use simplelog::SimpleLogger;
 use size::Size;
-use wasmtime::{Caller, Engine, Linker, Module, Store};
+use wasmtime::{AsContextMut, Caller, Engine, Linker, Module, Store, WasmParams, WasmResults};
 
 mod wasm32;
 
@@ -32,6 +32,12 @@ fn main() {
     // load the WASM file
     let module = Module::from_file(&engine, file_name).expect("Problem openning file");
 
+    // print all exported functions
+    let mut exports = module.exports();
+    while let Some(func) = exports.next() {
+        log::info!("Exported function: {}", func.name());
+    }
+
     // server functions
     let mut linker = Linker::new(&engine);
     linker
@@ -53,15 +59,58 @@ fn main() {
         .instantiate(&mut store, &module)
         .expect("Problem generating an instance");
 
-    let func_add = instance
-        .get_func(&mut store, "add")
-        .expect("Funtion [add] is not found")
-        .typed::<(u64, u64), u64>(&store)
-        .expect("Function [add] has another interface");
+    let func_add = find_function::<(u32, u32), u64>(&mut store, &instance, "sum_func").unwrap();
+
+    let func_alloc = find_function::<u32, u32>(&mut store, &instance, "wasm_alloc_buffer").unwrap();
+
+    let func_free =
+        find_function::<(u32, u32), ()>(&mut store, &instance, "wasm_free_buffer").unwrap();
+
+    // array to be aggregated
+    let array: Vec<u64> = vec![10, 20, 30];
+    let array_len = array.len() as u32;
+
+    // allocate buffer
+    let buffer = func_alloc
+        .call(&mut store, array_len)
+        .expect("Function malloc has failed") as u32;
+
+    // copy an array to the WASM
+    if let Some(mem) = instance.get_memory(&mut store, "memory") {
+        // by the specification WASM has only little endian byte-ordering
+        let bytes_buffer: Vec<_> = array.into_iter().flat_map(|d| d.to_le_bytes()).collect();
+        mem.write(&mut store, buffer as usize, &bytes_buffer)
+            .expect("Copy failed");
+    } else {
+        panic!("Unexpected memory issue");
+    }
 
     let result = func_add
-        .call(&mut store, (1, 3))
+        .call(&mut store, (buffer, array_len))
         .expect("Function call [add] failed");
 
+    let _ = func_free
+        .call(&mut store, (buffer, array_len))
+        .expect("Function call [wasm_free_buffer] has failed");
+
     log::info!("Result: {}", result);
+}
+
+fn find_function<I, O>(
+    store: &mut impl AsContextMut,
+    instance: &wasmtime::Instance,
+    name: &str,
+) -> Result<wasmtime::TypedFunc<I, O>, String>
+where
+    I: WasmParams,
+    O: WasmResults,
+{
+    let func = instance
+        .get_func(store.as_context_mut(), name)
+        .ok_or_else(|| format!("Funtion [{name}] is not found"))?;
+
+    let func = func
+        .typed::<I, O>(store.as_context_mut())
+        .map_err(|_| format!("Function [{name}] has another interface"))?;
+    Ok(func)
 }
