@@ -1,17 +1,11 @@
-use thiserror::Error;
 use wasmtime::{Caller, Extern};
 
 use std::str;
 
-#[derive(Error, Debug)]
-pub enum WasmError {
-    #[error("Cannot load exported function [{0}]")]
-    FunctionNotFound(&'static str),
-    #[error("pointer/length out of bound")]
-    InvalidPointers,
-    #[error("Invalid utf-8")]
-    InvalidUtf8,
-}
+use self::errors::WasmError;
+pub mod errors;
+pub mod helpers;
+pub mod memory;
 
 /**
  * Read string from the WASM memory and copy to the app memory.
@@ -44,6 +38,6 @@ fn read_string<'a>(
             Err(WasmError::InvalidPointers)
         }
     } else {
-        Err(WasmError::FunctionNotFound("memory"))
+        Err(WasmError::FunctionNotFound("memory".to_owned()))
     }
 }

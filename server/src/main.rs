@@ -3,7 +3,11 @@ use std::fs::metadata;
 
 use simplelog::SimpleLogger;
 use size::Size;
-use wasmtime::{AsContextMut, Caller, Engine, Linker, Module, Store, WasmParams, WasmResults};
+use wasm32::memory::WasmMemory;
+use wasmtime::{Caller, Engine, Linker, Module, Store};
+
+use crate::wasm32::errors::WasmError;
+use crate::wasm32::helpers::find_function;
 
 mod wasm32;
 
@@ -25,17 +29,24 @@ fn main() {
         }
     }
 
+    match run_wasm(&file_name) {
+        Ok(res) => log::info!("Function finished successully. Result: {res}"),
+        Err(err) => log::error!("Function has failed: {err}"),
+    }
+}
+
+fn run_wasm(file_name: &str) -> Result<u64, WasmError> {
     // run wasm module
     let engine = Engine::default();
     let mut store = Store::new(&engine, ());
 
     // load the WASM file
-    let module = Module::from_file(&engine, file_name).expect("Problem openning file");
+    let module = Module::from_file(&engine, file_name).map_err(WasmError::ModuleCorrupted)?;
 
     // print all exported functions
     let mut exports = module.exports();
     while let Some(func) = exports.next() {
-        log::info!("Exported function: {}", func.name());
+        log::debug!("Exported function: {}", func.name());
     }
 
     // server functions
@@ -52,65 +63,32 @@ fn main() {
                 };
             },
         )
-        .expect("Problem with registering exported function");
+        .map_err(|e| WasmError::CannotMakeFunction("host.log_info".to_owned(), e))?;
 
     // create an instance of WARM runtime
     let instance = linker
         .instantiate(&mut store, &module)
-        .expect("Problem generating an instance");
+        .map_err(WasmError::InstantiateFailed)?;
 
-    let func_add = find_function::<(u32, u32), u64>(&mut store, &instance, "sum_func").unwrap();
-
-    let func_alloc = find_function::<u32, u32>(&mut store, &instance, "wasm_alloc_buffer").unwrap();
-
-    let func_free =
-        find_function::<(u32, u32), ()>(&mut store, &instance, "wasm_free_buffer").unwrap();
+    let func_add = find_function::<(u32, u32), u64>(&mut store, &instance, "sum_func")?;
 
     // array to be aggregated
     let array: Vec<u64> = vec![10, 20, 30];
-    let array_len = array.len() as u32;
+    let array_len = array.len();
 
     // allocate buffer
-    let buffer = func_alloc
-        .call(&mut store, array_len)
-        .expect("Function malloc has failed") as u32;
-
+    let mut buffer = WasmMemory::allocate(array_len, &mut store, &instance)?;
     // copy an array to the WASM
-    if let Some(mem) = instance.get_memory(&mut store, "memory") {
-        // by the specification WASM has only little endian byte-ordering
-        let bytes_buffer: Vec<_> = array.into_iter().flat_map(|d| d.to_le_bytes()).collect();
-        mem.write(&mut store, buffer as usize, &bytes_buffer)
-            .expect("Copy failed");
-    } else {
-        panic!("Unexpected memory issue");
-    }
+    buffer.copy_array(&array, &mut store, &instance)?;
 
+    log::trace!("Begin aggregation");
     let result = func_add
-        .call(&mut store, (buffer, array_len))
-        .expect("Function call [add] failed");
+        .call(&mut store, (buffer.as_ptr(), array_len as u32))
+        .map_err(WasmError::FunctionCallFailed)?;
+    log::trace!("End aggregation");
 
-    let _ = func_free
-        .call(&mut store, (buffer, array_len))
-        .expect("Function call [wasm_free_buffer] has failed");
+    // deallocate buffer
+    buffer.free(&mut store, &instance)?;
 
-    log::info!("Result: {}", result);
-}
-
-fn find_function<I, O>(
-    store: &mut impl AsContextMut,
-    instance: &wasmtime::Instance,
-    name: &str,
-) -> Result<wasmtime::TypedFunc<I, O>, String>
-where
-    I: WasmParams,
-    O: WasmResults,
-{
-    let func = instance
-        .get_func(store.as_context_mut(), name)
-        .ok_or_else(|| format!("Funtion [{name}] is not found"))?;
-
-    let func = func
-        .typed::<I, O>(store.as_context_mut())
-        .map_err(|_| format!("Function [{name}] has another interface"))?;
-    Ok(func)
+    Ok(result)
 }
