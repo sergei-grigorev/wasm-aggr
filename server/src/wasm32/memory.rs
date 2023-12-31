@@ -1,43 +1,53 @@
+use std::{cell::RefCell, rc::Rc};
+
 use wasmtime::{AsContextMut, Instance};
 
 use super::{errors::WasmError, helpers::find_function};
 
-pub struct WasmMemory {
+pub struct WasmMemory<'a, S: AsContextMut> {
     ptr: usize,
     elements: usize,
+    store: Rc<RefCell<S>>,
+    instance: &'a Instance,
 }
 
-impl WasmMemory {
+impl<'a, S: AsContextMut> WasmMemory<'a, S> {
     pub fn allocate(
         elements: usize,
-        store: &mut impl AsContextMut,
-        instance: &Instance,
-    ) -> Result<WasmMemory, WasmError> {
-        let alloc_func =
-            find_function::<u32, u32>(&mut store.as_context_mut(), &instance, "wasm_alloc_buffer")?;
+        store: Rc<RefCell<S>>,
+        instance: &'a Instance,
+    ) -> Result<WasmMemory<'a, S>, WasmError> {
+        let alloc_func = find_function::<u32, u32>(store.clone(), &instance, "wasm_alloc_buffer")?;
 
+        let mut mut_store = store.borrow_mut();
         let ptr = alloc_func
-            .call(&mut store.as_context_mut(), elements as u32)
+            .call(mut_store.as_context_mut(), elements as u32)
             .map_err(WasmError::FunctionCallFailed)? as usize;
+        drop(mut_store);
 
-        Ok(WasmMemory { ptr, elements })
+        Ok(WasmMemory {
+            ptr,
+            elements,
+            store,
+            instance,
+        })
     }
 
     pub fn as_ptr(&self) -> u32 {
         self.ptr as u32
     }
 
-    pub fn copy_array(
-        &mut self,
-        arr: &[u64],
-        store: &mut impl AsContextMut,
-        instance: &Instance,
-    ) -> Result<(), WasmError> {
+    pub fn copy_array(&mut self, arr: &[u64]) -> Result<(), WasmError> {
+        let mut mut_store = self.store.borrow_mut();
+
         // copy an array to the WASM
-        if let Some(mem) = instance.get_memory(&mut store.as_context_mut(), "memory") {
+        if let Some(mem) = self
+            .instance
+            .get_memory(mut_store.as_context_mut(), "memory")
+        {
             // by the specification WASM has only little endian byte-ordering
             let bytes_buffer: Vec<_> = arr.into_iter().flat_map(|d| d.to_le_bytes()).collect();
-            mem.write(store.as_context_mut(), self.ptr, &bytes_buffer)
+            mem.write(mut_store.as_context_mut(), self.ptr, &bytes_buffer)
                 .map_err(WasmError::MemoryWriteError)?;
             Ok(())
         } else {
@@ -45,24 +55,28 @@ impl WasmMemory {
         }
     }
 
-    pub fn free(
-        &mut self,
-        store: &mut impl AsContextMut,
-        instance: &Instance,
-    ) -> Result<(), WasmError> {
+    fn free(&mut self) -> Result<(), WasmError> {
         let free_func = find_function::<(u32, u32), ()>(
-            &mut store.as_context_mut(),
-            &instance,
+            self.store.clone(),
+            &self.instance,
             "wasm_free_buffer",
         )?;
 
         free_func
             .call(
-                &mut store.as_context_mut(),
+                self.store.borrow_mut().as_context_mut(),
                 (self.ptr as u32, self.elements as u32),
             )
             .map_err(WasmError::FunctionCallFailed)?;
 
         Ok(())
+    }
+}
+
+impl<'a, C: AsContextMut> Drop for WasmMemory<'a, C> {
+    fn drop(&mut self) {
+        if let Err(e) = self.free() {
+            log::error!("WASM memory free error: {e}")
+        }
     }
 }
