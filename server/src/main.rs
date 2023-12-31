@@ -2,7 +2,12 @@ use std::cell::RefCell;
 use std::env;
 use std::fs::metadata;
 use std::rc::Rc;
+use std::sync::Arc;
 
+use arrow::array::Int32Array;
+use arrow::datatypes::{Field, SchemaBuilder};
+use arrow::ipc::writer::StreamWriter;
+use arrow::record_batch::RecordBatch;
 use simplelog::SimpleLogger;
 use size::Size;
 use wasm32::memory::WasmMemory;
@@ -37,7 +42,7 @@ fn main() {
     }
 }
 
-fn run_wasm(file_name: &str) -> Result<u64, WasmError> {
+fn run_wasm(file_name: &str) -> Result<u32, WasmError> {
     // run wasm module
     let engine = Engine::default();
 
@@ -76,22 +81,45 @@ fn run_wasm(file_name: &str) -> Result<u64, WasmError> {
         .map_err(WasmError::InstantiateFailed)?;
 
     // function to run aggregation
-    let func_add = find_function::<(u32, u32), u64>(store.clone(), &instance, "sum_func")?;
+    let func_add = find_function::<(u32, u32), u32>(store.clone(), &instance, "sum_func")?;
 
     // array to be aggregated
-    let array: Vec<u64> = vec![10, 20, 30];
-    let array_len = array.len();
+    let column1 = Int32Array::from(vec![10, 20, 30]);
+    let column2 = Int32Array::from(vec![30, 20, 10]);
+
+    let mut schema = SchemaBuilder::with_capacity(2);
+    schema.push(Field::new(
+        "column1",
+        arrow::datatypes::DataType::Int32,
+        false,
+    ));
+    schema.push(Field::new(
+        "column2",
+        arrow::datatypes::DataType::Int32,
+        false,
+    ));
+    let schema = schema.finish();
+
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(column1), Arc::new(column2)])
+        .map_err(WasmError::ArrowError)?;
+
+    // serialize to byte buffer
+    let mut serialized: Vec<u8> = Vec::with_capacity(batch.get_array_memory_size() * 2);
+    {
+        let mut stream_writer = StreamWriter::try_new(&mut serialized, &batch.schema()).unwrap();
+        stream_writer.write(&batch).unwrap();
+    }
 
     // allocate buffer
-    let mut buffer = WasmMemory::allocate(array_len, store.clone(), &instance)?;
+    let mut buffer = WasmMemory::allocate(serialized.len(), store.clone(), &instance)?;
     // copy an array to the WASM
-    buffer.copy_array(&array)?;
+    let size = buffer.copy(&serialized)?;
 
     log::trace!("Begin aggregation");
     let result = func_add
         .call(
             store.borrow_mut().as_context_mut(),
-            (buffer.as_ptr(), array_len as u32),
+            (buffer.as_ptr(), size as u32),
         )
         .map_err(WasmError::FunctionCallFailed)?;
     log::trace!("End aggregation");

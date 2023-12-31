@@ -6,38 +6,43 @@ use super::{errors::WasmError, helpers::find_function};
 
 pub struct WasmMemory<'a, S: AsContextMut> {
     ptr: usize,
-    elements: usize,
+    size: usize,
     store: Rc<RefCell<S>>,
     instance: &'a Instance,
 }
 
 impl<'a, S: AsContextMut> WasmMemory<'a, S> {
     pub fn allocate(
-        elements: usize,
+        size: usize,
         store: Rc<RefCell<S>>,
         instance: &'a Instance,
     ) -> Result<WasmMemory<'a, S>, WasmError> {
         let alloc_func = find_function::<u32, u32>(store.clone(), &instance, "wasm_alloc_buffer")?;
 
         let mut mut_store = store.borrow_mut();
+
         let ptr = alloc_func
-            .call(mut_store.as_context_mut(), elements as u32)
+            .call(mut_store.as_context_mut(), size as u32)
             .map_err(WasmError::FunctionCallFailed)? as usize;
         drop(mut_store);
 
-        Ok(WasmMemory {
-            ptr,
-            elements,
-            store,
-            instance,
-        })
+        if ptr != 0 {
+            Ok(WasmMemory {
+                ptr,
+                size,
+                store,
+                instance,
+            })
+        } else {
+            Err(WasmError::OutOfMemory)
+        }
     }
 
     pub fn as_ptr(&self) -> u32 {
         self.ptr as u32
     }
 
-    pub fn copy_array(&mut self, arr: &[u64]) -> Result<(), WasmError> {
+    pub fn copy(&mut self, buffer: &[u8]) -> Result<usize, WasmError> {
         let mut mut_store = self.store.borrow_mut();
 
         // copy an array to the WASM
@@ -46,10 +51,9 @@ impl<'a, S: AsContextMut> WasmMemory<'a, S> {
             .get_memory(mut_store.as_context_mut(), "memory")
         {
             // by the specification WASM has only little endian byte-ordering
-            let bytes_buffer: Vec<_> = arr.into_iter().flat_map(|d| d.to_le_bytes()).collect();
-            mem.write(mut_store.as_context_mut(), self.ptr, &bytes_buffer)
+            mem.write(mut_store.as_context_mut(), self.ptr, &buffer)
                 .map_err(WasmError::MemoryWriteError)?;
-            Ok(())
+            Ok(buffer.len())
         } else {
             Err(WasmError::MemoryBlockIsNotFound("memory".to_owned()))
         }
@@ -65,7 +69,7 @@ impl<'a, S: AsContextMut> WasmMemory<'a, S> {
         free_func
             .call(
                 self.store.borrow_mut().as_context_mut(),
-                (self.ptr as u32, self.elements as u32),
+                (self.ptr as u32, self.size as u32),
             )
             .map_err(WasmError::FunctionCallFailed)?;
 

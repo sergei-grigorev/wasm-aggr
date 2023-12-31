@@ -11,6 +11,8 @@ pub enum WasmError {
     InvalidPointers,
     #[error("Invalid utf-8")]
     InvalidUtf8,
+    #[error("Out of WASM Memory")]
+    OutOfMemory,
     #[error("Problem updating WASM memory: {0}")]
     MemoryWriteError(MemoryAccessError),
     #[error("Memory function [{0}] is not found")]
@@ -23,4 +25,6 @@ pub enum WasmError {
     CannotMakeFunction(String, WError),
     #[error("Module instantiation failed: {0}")]
     InstantiateFailed(WError),
+    #[error("Apache Arrow error: {0}")]
+    ArrowError(arrow::error::ArrowError),
 }
