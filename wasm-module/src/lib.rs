@@ -7,9 +7,19 @@ use arrow::array::Int32Array;
 use arrow::compute::sum;
 use arrow::ipc::reader::StreamReader;
 use arrow::record_batch::RecordBatch;
+use core::ptr::NonNull;
+use thiserror_no_std::Error;
 use wasm_bindgen::prelude::*;
 
 mod host_log;
+
+#[derive(Error, Debug)]
+enum AggregateError {
+    #[error("Cannot decode RecordBatch")]
+    DecodingError,
+    #[error("Data has a wrong format")]
+    CastError,
+}
 
 #[wasm_bindgen]
 pub fn sum_func(ptr: *mut u8, len: usize) -> i32 {
@@ -17,10 +27,26 @@ pub fn sum_func(ptr: *mut u8, len: usize) -> i32 {
         return 0;
     }
 
+    let ptr = unsafe { NonNull::new_unchecked(ptr) };
+    match sum_func_internal(ptr, len) {
+        Ok(res) => res,
+        Err(err) => {
+            host_log::log(&format!("Aggregation function failed with an error: {err}"));
+            0
+        }
+    }
+}
+
+fn sum_func_internal(ptr: NonNull<u8>, len: usize) -> Result<i32, AggregateError> {
     let batch: RecordBatch = {
-        let data: Vec<u8> = unsafe { Vec::from_raw_parts(ptr, len, len) };
-        let mut stream_reader = StreamReader::try_new(data.as_slice(), None).unwrap();
-        stream_reader.next().unwrap().unwrap()
+        let data: Vec<u8> = unsafe { Vec::from_raw_parts(ptr.as_ptr(), len, len) };
+        let mut stream_reader = StreamReader::try_new(data.as_slice(), None)
+            .map_err(|_| AggregateError::DecodingError)?;
+        if let Some(elem) = stream_reader.next() {
+            elem.map_err(|_| AggregateError::DecodingError)?
+        } else {
+            return Err(AggregateError::DecodingError);
+        }
     };
 
     host_log::log(&format!(
@@ -29,9 +55,9 @@ pub fn sum_func(ptr: *mut u8, len: usize) -> i32 {
     ));
 
     if let Some(column1) = batch.column(1).as_any().downcast_ref::<Int32Array>() {
-        sum(column1).unwrap_or_default()
+        Ok(sum(column1).unwrap_or_default())
     } else {
-        0i32
+        Err(AggregateError::CastError)
     }
 }
 
