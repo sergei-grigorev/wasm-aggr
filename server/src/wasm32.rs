@@ -1,43 +1,78 @@
-use wasmtime::{Caller, Extern};
+use std::path::PathBuf;
 
-use std::str;
+use anyhow::Context;
+use wasmtime::component::*;
+use wasmtime::{Config, Engine, Store};
+use wasmtime_wasi::preview2::{command, Table, WasiCtx, WasiCtxBuilder, WasiView};
 
 use self::errors::WasmError;
-pub mod errors;
-pub mod helpers;
-pub mod memory;
 
-/**
- * Read string from the WASM memory and copy to the app memory.
- */
-pub fn translate_str<'a>(
-    caller: &'a mut Caller<'_, ()>,
-    ptr: i32,
-    len: i32,
-) -> Result<&'a str, WasmError> {
-    read_string(caller, ptr as *const u8, len as usize)
+pub mod errors;
+
+wasmtime::component::bindgen!({
+    path: "wit/aggr.wit",
+    world: "aggr",
+    async: true
+});
+
+pub async fn aggregate(path: PathBuf, array: &[u8]) -> wasmtime::Result<u32> {
+    let mut config = Config::default();
+    config.wasm_component_model(true);
+    config.async_support(true);
+
+    // run wasm module
+    let engine = Engine::new(&config)?;
+
+    // server functions
+    let mut linker = Linker::new(&engine);
+
+    // Add the command world (aka WASI CLI) to the linker
+    command::add_to_linker(&mut linker).context("Failed to link command world")?;
+    let wasi_view = ServerWasiView::new();
+    let mut store = Store::new(&engine, wasi_view);
+
+    let component = Component::from_file(&engine, path).context("Component file not found")?;
+
+    let (instance, _) = Aggr::instantiate_async(&mut store, &component, &linker)
+        .await
+        .context("Failed to instantiate the example world")?;
+    instance
+        .docs_aggr_aggregation()
+        .call_sum_func(&mut store, array)
+        .await
+        .context("Failed to call sum-func function")?
+        .map_err(WasmError::FunctionCallFailed)
+        .context("Computation failed")
 }
 
-fn read_string<'a>(
-    caller: &'a mut Caller<'_, ()>,
-    ptr: *const u8,
-    len: usize,
-) -> Result<&'a str, WasmError> {
-    if let Some(Extern::Memory(mem)) = caller.get_export("memory") {
-        let data = mem
-            .data(caller)
-            .get(ptr as u32 as usize..)
-            .and_then(|arr| arr.get(..len as u32 as usize));
-        if let Some(data) = data {
-            if let Ok(str) = str::from_utf8(data) {
-                Ok(str)
-            } else {
-                Err(WasmError::InvalidUtf8)
-            }
-        } else {
-            Err(WasmError::InvalidPointers)
-        }
-    } else {
-        Err(WasmError::FunctionNotFound("memory".to_owned()))
+struct ServerWasiView {
+    table: Table,
+    ctx: WasiCtx,
+}
+
+impl ServerWasiView {
+    fn new() -> Self {
+        let table = Table::new();
+        let ctx = WasiCtxBuilder::new().inherit_stdio().build();
+
+        Self { table, ctx }
+    }
+}
+
+impl WasiView for ServerWasiView {
+    fn table(&self) -> &Table {
+        &self.table
+    }
+
+    fn table_mut(&mut self) -> &mut Table {
+        &mut self.table
+    }
+
+    fn ctx(&self) -> &WasiCtx {
+        &self.ctx
+    }
+
+    fn ctx_mut(&mut self) -> &mut WasiCtx {
+        &mut self.ctx
     }
 }

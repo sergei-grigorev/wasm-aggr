@@ -1,0 +1,11 @@
+package docs:aggr@0.1.0;
+
+interface aggregation {
+    sum-func: func(array: list<u8>) -> result<u32, string>;
+}
+
+world aggr {
+    export aggregation;
+}
+
+

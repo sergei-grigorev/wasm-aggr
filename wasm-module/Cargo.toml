@@ -10,9 +10,11 @@ crate-type = ["cdylib"]
 target = "wasm32-unknown-unknown"
 
 [dependencies]
-wasm-bindgen = "0.2.84"
+cargo-component-bindings = "0.6.0"
 arrow = "49.0"
 thiserror-no-std = "2.0.2"
 
-[dev-dependencies]
-wasm-bindgen-test = "0.3.34"
+[package.metadata.component]
+package = "component:aggr"
+
+[package.metadata.component.dependencies]

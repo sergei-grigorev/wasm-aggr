@@ -1,13 +1,14 @@
-# Experiments with WASM modules
+# Experiments with WASM components
 
 ## Build
 
+For running commands you need to either install [just](http://just.systems) or copy commands from the file `justfile`.
+Also you need to install [cargo-components](https://component-model.bytecodealliance.org/language-support/rust.html).
+
 ### Build WASM Module
 
-- go to the directory `aggr`
-- run command `wasm-pack build --no-typescript --target dyno`
+- run command `just build`
 
 ### Build and run server app
 
-- go to the directory `server`
-- run command `cargo run -p server -- aggr/pkg/aggr_bg.wasm`
+- run command `just run`

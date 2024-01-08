@@ -1,17 +1,17 @@
 #![no_std]
+cargo_component_bindings::generate!();
+use crate::bindings::exports::docs::aggr::aggregation::Guest;
+
 extern crate alloc;
 
 use alloc::format;
+use alloc::string::String;
 use alloc::vec::Vec;
 use arrow::array::Int32Array;
 use arrow::compute::sum;
 use arrow::ipc::reader::StreamReader;
 use arrow::record_batch::RecordBatch;
-use core::ptr::NonNull;
 use thiserror_no_std::Error;
-use wasm_bindgen::prelude::*;
-
-mod host_log;
 
 #[derive(Error, Debug)]
 enum AggregateError {
@@ -21,27 +21,21 @@ enum AggregateError {
     CastError,
 }
 
-#[wasm_bindgen]
-pub fn sum_func(ptr: *mut u8, len: usize) -> i32 {
-    if ptr.is_null() {
-        return 0;
-    }
+struct Component;
 
-    let ptr = unsafe { NonNull::new_unchecked(ptr) };
-    match sum_func_internal(ptr, len) {
-        Ok(res) => res,
-        Err(err) => {
-            host_log::log(&format!("Aggregation function failed with an error: {err}"));
-            0
+impl Guest for Component {
+    fn sum_func(array: Vec<u8>) -> Result<u32, String> {
+        match sum_func_internal(&array) {
+            Ok(res) => Ok(res),
+            Err(err) => Err(format!("Aggregation function failed with an error: {err}")),
         }
     }
 }
 
-fn sum_func_internal(ptr: NonNull<u8>, len: usize) -> Result<i32, AggregateError> {
+fn sum_func_internal(array: &[u8]) -> Result<u32, AggregateError> {
     let batch: RecordBatch = {
-        let data: Vec<u8> = unsafe { Vec::from_raw_parts(ptr.as_ptr(), len, len) };
-        let mut stream_reader = StreamReader::try_new(data.as_slice(), None)
-            .map_err(|_| AggregateError::DecodingError)?;
+        let mut stream_reader =
+            StreamReader::try_new(array, None).map_err(|_| AggregateError::DecodingError)?;
         if let Some(elem) = stream_reader.next() {
             elem.map_err(|_| AggregateError::DecodingError)?
         } else {
@@ -49,36 +43,16 @@ fn sum_func_internal(ptr: NonNull<u8>, len: usize) -> Result<i32, AggregateError
         }
     };
 
-    host_log::log(&format!(
-        "function sum has been called with the table rows [{}]",
-        batch.num_rows()
-    ));
+    // host_log::log(&format!(
+    //     "function sum has been called with the table rows [{}]",
+    //     batch.num_rows()
+    // ));
 
     if let Some(column1) = batch.column(1).as_any().downcast_ref::<Int32Array>() {
-        Ok(sum(column1).unwrap_or_default())
+        Ok(sum(column1).unwrap_or_default() as u32)
     } else {
         Err(AggregateError::CastError)
     }
-}
-
-#[wasm_bindgen]
-pub fn wasm_alloc_buffer(size: usize) -> *mut u8 {
-    let alligment = arrow::alloc::ALIGNMENT;
-    let layout = alloc::alloc::Layout::from_size_align(size, alligment).unwrap();
-    unsafe { alloc::alloc::alloc(layout) }
-}
-
-#[wasm_bindgen]
-pub fn wasm_free_buffer(ptr: *mut u8, size: usize) {
-    if ptr.is_null() {
-        return;
-    }
-
-    let alligment = arrow::alloc::ALIGNMENT;
-    let layout = alloc::alloc::Layout::from_size_align(size, alligment).unwrap();
-    // safety: this method is called after the allocation method and cannot be called
-    // manualy providing the wrong parameters
-    unsafe { alloc::alloc::dealloc(ptr, layout) };
 }
 
 #[cfg(test)]
@@ -123,8 +97,7 @@ mod tests {
             stream_writer.write(&batch).unwrap();
         }
 
-        let result = sum_func(buffer.as_mut_ptr(), buffer.len());
-        core::mem::forget(buffer);
+        let result = Component::sum_func(buffer).unwrap();
         assert_eq!(result, 60);
     }
 }
