@@ -6,15 +6,19 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib"]
 
-[build]
-target = "wasm32-unknown-unknown"
-
 [dependencies]
 cargo-component-bindings = "0.6.0"
-arrow = "49.0"
+arrow = { version = "49.0", features = ["ipc"], default-features = false }
 thiserror-no-std = "2.0.2"
+
+[build]
+target = "wasm32-unknown-unknown"
 
 [package.metadata.component]
 package = "component:aggr"
 
 [package.metadata.component.dependencies]
+
+[profile.release]
+lto = true
+opt-level = 's'

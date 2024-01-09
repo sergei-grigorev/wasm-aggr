@@ -47,8 +47,8 @@ async fn main() -> anyhow::Result<()> {
 
 async fn run_wasm(file_name: &str) -> Result<u32, anyhow::Error> {
     // array to be aggregated
-    let column1 = Int32Array::from(vec![10, 20, 30]);
-    let column2 = Int32Array::from(vec![30, 20, 10]);
+    let column1 = Int32Array::from(vec![100, 200, 300]);
+    let column2 = Int32Array::from(vec![400, 500, 600]);
 
     let mut schema = SchemaBuilder::with_capacity(2);
     schema.push(Field::new(
@@ -73,7 +73,9 @@ async fn run_wasm(file_name: &str) -> Result<u32, anyhow::Error> {
         stream_writer.write(&batch).unwrap();
     }
 
+    // the biggest sum of all rows
     let result = aggregate(PathBuf::from(file_name), &serialized).await?;
+    assert_eq!(result, 900);
 
     Ok(result)
 }

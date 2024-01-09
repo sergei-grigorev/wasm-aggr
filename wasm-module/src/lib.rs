@@ -8,7 +8,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use arrow::array::Int32Array;
-use arrow::compute::sum;
+use arrow::compute::max;
 use arrow::ipc::reader::StreamReader;
 use arrow::record_batch::RecordBatch;
 use thiserror_no_std::Error;
@@ -47,12 +47,22 @@ fn sum_func_internal(array: &[u8]) -> Result<u32, AggregateError> {
     //     "function sum has been called with the table rows [{}]",
     //     batch.num_rows()
     // ));
+    let column1: &Int32Array = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .ok_or(AggregateError::CastError)?;
 
-    if let Some(column1) = batch.column(1).as_any().downcast_ref::<Int32Array>() {
-        Ok(sum(column1).unwrap_or_default() as u32)
-    } else {
-        Err(AggregateError::CastError)
-    }
+    let column2: &Int32Array = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .ok_or(AggregateError::CastError)?;
+
+    // combine both arrays and then retun the max element
+    let both: Int32Array = arrow::compute::binary(column1, column2, |a, b| a + b)
+        .map_err(|_| AggregateError::CastError)?;
+    Ok(max(&both).unwrap_or_default() as u32)
 }
 
 #[cfg(test)]
@@ -70,8 +80,8 @@ mod tests {
     fn it_works() {
         let batch = {
             // array to be aggregated
-            let column1 = Int32Array::from(vec![10, 20, 30]);
-            let column2 = Int32Array::from(vec![30, 20, 10]);
+            let column1 = Int32Array::from(vec![100, 200, 300]);
+            let column2 = Int32Array::from(vec![400, 500, 600]);
 
             let mut schema = SchemaBuilder::with_capacity(2);
             schema.push(Field::new(
@@ -97,7 +107,8 @@ mod tests {
             stream_writer.write(&batch).unwrap();
         }
 
+        // the biggest sum between columns
         let result = Component::sum_func(buffer).unwrap();
-        assert_eq!(result, 60);
+        assert_eq!(result, 900);
     }
 }
